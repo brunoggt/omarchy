@@ -19,7 +19,11 @@ Every subscription on one page, limits first.
   per limit window: its meter and the time until it resets (the exact percentage
   on hover). A model-scoped allowance on the same clock (Claude's Fable weekly
   limit) is a tick on that window's meter rather than a line of its own; the
-  row's tooltip names it. A lapsed or missing sign-in shows a _Sign-in required_ link that signs
+  row's tooltip names it. Between the meter and the countdown, an arrow says
+  whether the spend runs ahead of the clock (more than five points past the
+  share of the window gone) or under it, and a gauge that it is on pace; the
+  tooltip adds that share and where the window's rate so far lands at the
+  reset, or when it runs out first. A lapsed or missing sign-in shows a _Sign-in required_ link that signs
   that account in again from the panel; other endpoint trouble shows under the
   name in the urgent color. Limits kept from an earlier check after a failed one dim, and their
   tooltip says how old they are.

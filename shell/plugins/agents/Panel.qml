@@ -524,7 +524,10 @@ Panel {
     return {
       title: String(title || "") !== "" ? String(title) : windowTitle(label),
       percent: expired ? 0 : Number(percent),
-      resetAt: expired ? "" : String(resetAt || "")
+      resetAt: expired ? "" : String(resetAt || ""),
+      // Kept from the raw label: "Session", the title, says nothing of how
+      // long the window runs.
+      spanMs: windowSpanMs(label)
     }
   }
 
@@ -598,6 +601,66 @@ Panel {
     if (days > 0) return Commons.I18n.t("agents.durationDaysHours").arg(Commons.I18n.formatNumber(days)).arg(Commons.I18n.formatNumber(hours % 24))
     if (hours > 0) return Commons.I18n.t("agents.durationHoursMinutes").arg(Commons.I18n.formatNumber(hours)).arg(Commons.I18n.formatNumber(minutes % 60))
     return Commons.I18n.t("agents.durationMinutes").arg(Commons.I18n.formatNumber(Math.max(1, minutes)))
+  }
+
+  // ---------------------------------------------------------------- pace
+  //
+  // Spent evenly, a window's usage tracks the share of it that has elapsed.
+  // More than five points past that share is ahead of pace, more than five
+  // short is under. The projection carries the window's average rate so far
+  // to the reset: how much of the allowance that reaches, and when it runs
+  // dry if that comes first.
+
+  function windowElapsed(w) {
+    if (!w || !(w.spanMs > 0)) return -1
+    var remainingMs = resetMsFor(w)
+    // A reset further out than the window is long means the label was misread
+    // (a model name parsed as minutes); no pace beats a wrong one.
+    if (!(remainingMs > 0) || remainingMs > w.spanMs) return -1
+    return (w.spanMs - remainingMs) / w.spanMs
+  }
+
+  function paceFor(w) {
+    var elapsed = windowElapsed(w)
+    if (elapsed < 0) return null
+    var points = (w.percent - elapsed) * 100
+    var pace = {
+      elapsed: elapsed,
+      state: points > 5 ? "ahead" : points < -5 ? "under" : "on",
+      projected: -1,
+      runsOutMs: -1
+    }
+    // The first minutes of a window say more about one prompt than about a
+    // habit, so the projection waits for 5% of it to pass.
+    if (elapsed >= 0.05 && w.percent > 0 && w.percent < 1) {
+      pace.projected = w.percent / elapsed
+      if (pace.projected > 1)
+        pace.runsOutMs = (1 - w.percent) * elapsed * w.spanMs / w.percent
+    }
+    return pace
+  }
+
+  function paceGlyph(pace) {
+    if (!pace) return ""
+    if (pace.state === "ahead") return "\u{f0535}"
+    if (pace.state === "under") return "\u{f0533}"
+    return "\u{f029a}"
+  }
+
+  function paceLines(pace) {
+    if (!pace) return []
+    var elapsed = Commons.I18n.formatNumber(Math.round(pace.elapsed * 100))
+    var lines = [pace.state === "ahead" ? Commons.I18n.t("agents.paceAhead").arg(elapsed)
+      : pace.state === "under" ? Commons.I18n.t("agents.paceUnder").arg(elapsed)
+      : Commons.I18n.t("agents.paceOn").arg(elapsed)]
+    var projected = Commons.I18n.formatNumber(Math.round(pace.projected * 100))
+    // Within five points of the clock a projection just past 100% is as much
+    // rounding as a warning, so only ahead of pace counts down to running out.
+    if (pace.runsOutMs > 0 && pace.state === "ahead")
+      lines.push(Commons.I18n.t("agents.paceRunsOut").arg(formatDuration(pace.runsOutMs)).arg(projected))
+    else if (pace.projected >= 0)
+      lines.push(Commons.I18n.t("agents.paceByReset").arg(projected))
+    return lines
   }
 
   // Window titles stay English in the records, where scopedPart() and the
@@ -1987,6 +2050,9 @@ Panel {
     readonly property var scoped: window && window.scoped ? window.scoped : []
     readonly property bool alarming: window && window.percent >= 0.9
     readonly property real resetMs: root.resetMsFor(window)
+    // A percentage kept from an earlier check, read against the current clock,
+    // would look like a slowdown that never happened.
+    readonly property var pace: stale ? null : root.paceFor(window)
     implicitHeight: Math.max(compactTitle.implicitHeight, compactValue.implicitHeight)
 
     HoverHandler { id: compactHover }
@@ -2002,6 +2068,7 @@ Panel {
             ? Commons.I18n.t("agents.windowUsedResets").arg(windowName).arg(used).arg(root.formatDuration(compact.resetMs))
             : Commons.I18n.t("agents.windowUsed").arg(windowName).arg(used))
         }
+        lines = lines.concat(root.paceLines(compact.pace))
         if (compact.stale)
           lines.push(compact.fetchedAt > 0 && root.nowMs - compact.fetchedAt > 60000
             ? Commons.I18n.t("agents.lastUpdatedAgo").arg(root.formatDuration(root.nowMs - compact.fetchedAt))
@@ -2026,12 +2093,29 @@ Panel {
 
     Meter {
       anchors.left: compactTitle.right
-      anchors.right: compactValue.left
-      anchors.rightMargin: Style.space(20)
+      anchors.right: compactPace.left
       anchors.verticalCenter: parent.verticalCenter
       value: compact.window ? compact.window.percent : -1
       alarming: compact.alarming
       markers: compact.scoped
+    }
+
+    // Whether the spend runs ahead of the clock, in the gap before the
+    // countdown; the numbers behind it are in the row's tooltip.
+    Item {
+      id: compactPace
+      width: Style.space(20)
+      height: parent.height
+      anchors.right: compactValue.left
+
+      Text {
+        anchors.centerIn: parent
+        textFormat: Text.PlainText
+        text: root.paceGlyph(compact.pace)
+        color: root.dim
+        font.family: root.fontFamily
+        font.pixelSize: Style.font.caption
+      }
     }
 
     // Sized to the widest time left ("19h 40m"), so every meter ends in the

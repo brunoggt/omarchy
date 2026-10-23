@@ -343,15 +343,15 @@ assertDeepEqual(
     { label: 'Opus 5 (1M context) Weekly', title: 'Opus 5 (1M context) Weekly', percent: 0.42, resetsAt: '' }
   ] }),
   [
-    { title: 'Session', percent: 0.78, resetAt: '' },
-    { title: 'Opus 5 (1M context) Weekly', percent: 0.42, resetAt: '' }
+    { title: 'Session', percent: 0.78, resetAt: '', spanMs: 18000000 },
+    { title: 'Opus 5 (1M context) Weekly', percent: 0.42, resetAt: '', spanMs: 604800000 }
   ],
   'agents panel titles a limit off the collector when it states one'
 )
 
 assertDeepEqual(
   limitWindows({ limits: [{ label: 'Weekly (7-day)', percent: 0.12, resetsAt: '' }] }),
-  [{ title: 'Weekly', percent: 0.12, resetAt: '' }],
+  [{ title: 'Weekly', percent: 0.12, resetAt: '', spanMs: 604800000 }],
   'agents panel still reads a window out of a label that carries no title'
 )
 
@@ -359,7 +359,7 @@ const resetAt = new Date(panelRoot.nowMs + 1000).toISOString()
 const measured = { limits: [{ label: 'Session (5-hour)', percent: 0.78, resetsAt: resetAt }] }
 assertEqual(limitWindows(measured)[0].percent, 0.78, 'usage remains until the reset time')
 panelRoot.nowMs += 1000
-assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '' }], 'usage resets at the deadline while the panel stays open')
+assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '', spanMs: 18000000 }], 'usage resets at the deadline while the panel stays open')
 assertEqual(measured.limits[0].percent, 0.78, 'display reset leaves the measured record intact')
 
 // A model's weekly allowance rides under the Weekly row; one whose window has
@@ -372,12 +372,32 @@ assertDeepEqual(
     { label: 'Opus Monthly', title: 'Opus Monthly', percent: 0.5, resetsAt: '' }
   ] }),
   [
-    { title: 'Session', percent: 0.94, resetAt: '', scoped: [] },
-    { title: 'Weekly', percent: 0.25, resetAt: 'w', scoped: [{ title: 'Fable', percent: 0.09, resetAt: 'w' }] },
-    { title: 'Opus Monthly', percent: 0.5, resetAt: '', scoped: [] }
+    { title: 'Session', percent: 0.94, resetAt: '', spanMs: 18000000, scoped: [] },
+    { title: 'Weekly', percent: 0.25, resetAt: 'w', spanMs: 604800000, scoped: [{ title: 'Fable', percent: 0.09, resetAt: 'w' }] },
+    { title: 'Opus Monthly', percent: 0.5, resetAt: '', spanMs: 2592000000, scoped: [] }
   ],
   'agents panel shows a model-scoped window under the window it runs on'
 )
+
+// Pace weighs the spend against the share of the window gone; the projection
+// carries that rate to the reset and stays quiet where it would only guess.
+eval(source.slice(source.indexOf('function resetMsFor'), source.indexOf('function formatDuration')).replaceAll('root.nowMs', 'panelRoot.nowMs'))
+eval(source.slice(source.indexOf('function windowElapsed'), source.indexOf('function paceGlyph')).replaceAll('root.nowMs', 'panelRoot.nowMs'))
+const hour = 3600 * 1000
+const weekly = (percent, hoursLeft) => ({ percent, resetAt: new Date(panelRoot.nowMs + hoursLeft * hour).toISOString(), spanMs: 168 * hour })
+
+const heavy = paceFor(weekly(0.4, 128))
+assertEqual(heavy.state, 'ahead', 'spending past the elapsed share of the window is ahead of pace')
+assertEqual(Math.round(heavy.projected * 100), 168, 'the projection carries the rate so far to the reset')
+assertEqual(Math.round(heavy.runsOutMs / hour), 60, 'an allowance that runs dry says when')
+assertEqual(paceFor(weekly(0.27, 128)).state, 'on', 'within five points of the clock is on pace')
+const light = paceFor(weekly(0.1, 128))
+assertEqual(light.state, 'under', 'spending short of the clock is under pace')
+assertEqual(light.runsOutMs, -1, 'an allowance that outlasts its window never runs out')
+assertEqual(paceFor(weekly(0.03, 167)).projected, -1, 'the first 5% of a window projects nothing')
+assertEqual(paceFor({ ...weekly(0.4, 128), spanMs: 60 * 1000 }), null, 'a span shorter than the time to reset is a misread label')
+const session = { limits: [{ label: 'Session (5-hour)', percent: 0.5, resetsAt: new Date(panelRoot.nowMs + 2.5 * hour).toISOString() }] }
+assertEqual(paceFor(limitWindows(session)[0]).elapsed, 0.5, 'the window length comes from the collector label')
 JS
 
 # Anthropic rate-limits its usage endpoint readily. A refused re-check of
