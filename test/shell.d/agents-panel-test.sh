@@ -67,15 +67,15 @@ assertDeepEqual(
     { label: 'Opus 5 (1M context) Weekly', title: 'Opus 5 (1M context) Weekly', percent: 0.42, resetsAt: '' }
   ] }),
   [
-    { title: 'Session', percent: 0.78, resetAt: '', spanMs: 18000000 },
-    { title: 'Opus 5 (1M context) Weekly', percent: 0.42, resetAt: '', spanMs: 604800000 }
+    { title: 'Session', percent: 0.78, resetAt: '', spanMs: 18000000, history: [] },
+    { title: 'Opus 5 (1M context) Weekly', percent: 0.42, resetAt: '', spanMs: 604800000, history: [] }
   ],
   'agents panel titles a limit off the collector when it states one'
 )
 
 assertDeepEqual(
   limitWindows({ limits: [{ label: 'Weekly (7-day)', percent: 0.12, resetsAt: '' }] }),
-  [{ title: 'Weekly', percent: 0.12, resetAt: '', spanMs: 604800000 }],
+  [{ title: 'Weekly', percent: 0.12, resetAt: '', spanMs: 604800000, history: [] }],
   'agents panel still reads a window out of a label that carries no title'
 )
 
@@ -83,13 +83,13 @@ const resetAt = new Date(panelRoot.nowMs + 1000).toISOString()
 const measured = { limits: [{ label: 'Session (5-hour)', percent: 0.78, resetsAt: resetAt }] }
 assertEqual(limitWindows(measured)[0].percent, 0.78, 'usage remains until the reset time')
 panelRoot.nowMs += 1000
-assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '', spanMs: 18000000 }], 'usage resets at the deadline while the panel stays open')
+assertDeepEqual(limitWindows(measured), [{ title: 'Session', percent: 0, resetAt: '', spanMs: 18000000, history: [] }], 'usage resets at the deadline while the panel stays open')
 assertEqual(measured.limits[0].percent, 0.78, 'display reset leaves the measured record intact')
 
 // A model's weekly allowance is a row of its own, paced on the weekly clock.
 assertDeepEqual(
   limitWindows({ limits: [{ label: 'Fable Weekly', title: 'Fable Weekly', percent: 0.09, resetsAt: '' }] }),
-  [{ title: 'Fable Weekly', percent: 0.09, resetAt: '', spanMs: 604800000 }],
+  [{ title: 'Fable Weekly', percent: 0.09, resetAt: '', spanMs: 604800000, history: [] }],
   'agents panel gives a model-scoped window the span of the window it runs on'
 )
 // A scoped session's label carries no length; it borrows the session's.
@@ -128,4 +128,36 @@ const session = { limits: [{ label: 'Session (5-hour)', percent: 0.5, resetsAt: 
 assertEqual(paceFor(limitWindows(session)[0]).evenLeft, 0.5, 'the window length comes from the collector label')
 const monthly = { limits: [{ label: 'Monthly', percent: 0.15, resetsAt: new Date(panelRoot.nowMs + 26 * 24 * hour).toISOString() }] }
 assertEqual(paceFor(limitWindows(monthly)[0]), null, 'a monthly window of unknown length draws no pace')
+
+// Samples on the window put the projection on the recent burn rate: about the
+// last fifth of the window, an hour of a session or a day of a week.
+eval(source.slice(source.indexOf('function paceUrgent'), source.indexOf('function paceGlyph')))
+const minute = 60 * 1000
+const sampled = (percent, hoursLeft, spanHours, samples) => ({
+  percent, resetAt: new Date(panelRoot.nowMs + hoursLeft * hour).toISOString(), spanMs: spanHours * hour,
+  history: samples.map(([minutesAgo, p]) => [panelRoot.nowMs - minutesAgo * minute, p])
+})
+const future = new Date(panelRoot.nowMs + hour).toISOString()
+assertDeepEqual(limitWindows({ limits: [{ label: 'Session (5-hour)', percent: 0.1, resetsAt: future, history: [[1, 0.1]] }] })[0].history,
+  [[1, 0.1]], 'a window keeps the samples its record carries')
+// A session whose window opened on the hour but whose first prompt came 45
+// minutes later: 22% gone in those 45 minutes, not in the 90 since the hour.
+const lateStart = sampled(0.22, 3.5, 5, [[45, 0], [30, 0.08], [15, 0.15], [0, 0.22]])
+assertEqual(paceFor({ ...lateStart, history: [] }).runsOutMs, -1, 'the average over the whole window sees a session that lasts')
+const late = paceFor(lateStart)
+assertEqual(late.rateSpanMs, 45 * minute, 'samples younger than the lookback use all they cover')
+assertEqual(Math.round(late.runsOutMs / minute), 160, 'the recent rate says when the session runs dry')
+assertEqual(Math.round(-late.leftAtReset * 100), 25, 'and how much more allowance it would need')
+assert(paceUrgent(late), 'a recent rate that runs dry is urgent even under pace by the clock')
+assert(!paceUrgent(paceFor(weekly(0.24, 128))), 'an average that runs dry on pace is still only rounding')
+const idle = paceFor(sampled(0.22, 3, 5, [[90, 0.02], [60, 0.2], [45, 0.22], [0, 0.22]]))
+assertEqual(idle.rateSpanMs, hour, 'the rate looks back an hour of a session')
+assertEqual(Math.round(idle.leftAtReset * 100), 72, 'a burst that stopped no longer drains the projection')
+assertEqual(paceFor(sampled(0.22, 3.5, 5, [[5, 0.21], [0, 0.22]])).rateSpanMs, 0, 'a few minutes of samples leave the average in place')
+const behind = paceFor(sampled(0.22, 3.5, 5, [[70, 0], [10, 0.22]]))
+assertEqual(Math.round(behind.runsOutMs / minute), 203, 'the rate holds from its newest sample, not from now')
+assertEqual(paceFor(sampled(0.42, 64, 168, [[180, 0.4], [0, 0.42]])).rateSpanMs, 0, 'a week needs four hours of samples')
+const week = paceFor(sampled(0.42, 64, 168, [[36 * 60, 0.25], [24 * 60, 0.3], [0, 0.42]]))
+assertEqual(week.rateSpanMs, 24 * hour, 'the rate looks back a day of a week')
+assertEqual(Math.round(week.leftAtReset * 100), 26, 'the projection carries the last day to the reset')
 JS

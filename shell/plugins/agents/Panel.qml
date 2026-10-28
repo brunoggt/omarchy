@@ -529,7 +529,7 @@ Panel {
   // and that beats reading it back out of the label: a model-scoped limit is
   // titled after its model, and a name like "Opus 5 (1M context)" would parse
   // as a one-minute window.
-  function limitWindow(label, percent, resetAt, title) {
+  function limitWindow(label, percent, resetAt, title, history) {
     var reset = new Date(String(resetAt || "")).getTime()
     var expired = isFinite(reset) && reset <= root.nowMs
     return {
@@ -540,7 +540,10 @@ Panel {
       // long the window runs. A monthly window follows a billing period of 28
       // to 31 days that no collector reports, so it carries no span and draws
       // no pace rather than a wrong one.
-      spanMs: String(label || "").toLowerCase().indexOf("month") >= 0 ? 0 : windowSpanMs(label)
+      spanMs: String(label || "").toLowerCase().indexOf("month") >= 0 ? 0 : windowSpanMs(label),
+      // [ms, percent] samples of this window, oldest first, that
+      // omarchy-agent-usage-update carries from record to record.
+      history: !expired && Array.isArray(history) ? history : []
     }
   }
 
@@ -551,7 +554,7 @@ Panel {
     for (var i = 0; i < list.length; i++) {
       var entry = list[i] || {}
       var percent = Number(entry.percent)
-      if (percent >= 0) out.push(limitWindow(entry.label, percent, entry.resetsAt, entry.title))
+      if (percent >= 0) out.push(limitWindow(entry.label, percent, entry.resetsAt, entry.title, entry.history))
     }
     // A model-scoped label names its model, not its length ("Fable Session"),
     // so the row runs on the clock of the window it is scoped to.
@@ -605,9 +608,11 @@ Panel {
   // spent, the way the prepaid balance does. Spent evenly, the fill would sit
   // exactly on the share of the window still ahead, and that share is the
   // pace tick. More than five points below it is ahead of pace, more than
-  // five above is under. The projection carries the window's average rate so
-  // far to the reset: what is still left then, or, when the allowance runs
-  // dry first, when that happens and how much more allowance the habit needs.
+  // five above is under. The projection carries the recent burn rate to the
+  // reset: what is still left then, or, when the allowance runs dry first,
+  // when that happens and how much more allowance the habit needs. Until the
+  // record holds enough samples for a recent rate, the window's average rate
+  // so far stands in.
 
   function windowLeft(w) {
     return w && w.percent >= 0 ? clamp(1 - w.percent, 0, 1) : -1
@@ -622,6 +627,33 @@ Panel {
     return (w.spanMs - remainingMs) / w.spanMs
   }
 
+  // The burn rate over about the last fifth of the window (an hour of a
+  // session, a day of a week), from the samples on the window. The window's
+  // own average misreads both a late start, since a session's window opens
+  // on the hour rather than at the first prompt, and a habit that changes
+  // halfway, which is when the projection matters most. Null until the
+  // samples cover a sixth of that lookback.
+  function recentRate(w) {
+    var samples = w && w.history ? w.history : []
+    if (samples.length < 2 || !(w.spanMs > 0)) return null
+    var lookbackMs = Math.min(w.spanMs / 5, 24 * 3600 * 1000)
+    var last = samples[samples.length - 1]
+    var anchor = samples[0]
+    for (var i = samples.length - 2; i >= 0; i--) {
+      if (last[0] - samples[i][0] >= lookbackMs) {
+        anchor = samples[i]
+        break
+      }
+    }
+    var spanMs = last[0] - anchor[0]
+    if (!(spanMs >= lookbackMs / 6)) return null
+    return {
+      perMs: Math.max(0, Number(last[1]) - Number(anchor[1])) / spanMs,
+      asOfMs: Number(last[0]),
+      spanMs: spanMs
+    }
+  }
+
   function paceFor(w) {
     var elapsed = windowElapsed(w)
     if (elapsed < 0) return null
@@ -632,26 +664,41 @@ Panel {
       evenLeft: evenLeft,
       state: gap > 0.05 ? "ahead" : gap < -0.05 ? "under" : "on",
       projected: false,
+      // How far back the projected rate looks; 0 for the window's average.
+      rateSpanMs: 0,
       // Negative when the allowance runs out before the reset: the shortfall.
       leftAtReset: 0,
       runsOutMs: -1
     }
-    // The first minutes of a window say more about one prompt than about a
-    // habit, so the projection waits for 5% of it to pass.
-    if (elapsed >= 0.05 && left > 0 && left < 1) {
-      var spent = 1 - left
-      pace.projected = true
-      pace.leftAtReset = 1 - spent / elapsed
-      if (pace.leftAtReset < 0)
-        pace.runsOutMs = left * elapsed * w.spanMs / spent
+    if (!(left > 0 && left < 1)) return pace
+    // A recent rate holds as of its newest sample, whose percent is the
+    // window's; the average holds now.
+    var rate = 0
+    var asOfMs = root.nowMs
+    var recent = recentRate(w)
+    if (recent) {
+      rate = recent.perMs
+      asOfMs = recent.asOfMs
+      pace.rateSpanMs = recent.spanMs
+    } else if (elapsed >= 0.05) {
+      // The first minutes of a window say more about one prompt than about
+      // a habit, so the average waits for 5% of it to pass.
+      rate = (1 - left) / (elapsed * w.spanMs)
+    } else {
+      return pace
     }
+    pace.projected = true
+    pace.leftAtReset = left - rate * (resetMsFor(w) + root.nowMs - asOfMs)
+    if (pace.leftAtReset < 0)
+      pace.runsOutMs = Math.max(0, left / rate - (root.nowMs - asOfMs))
     return pace
   }
 
-  // Within the on-pace band a projection just past empty is rounding as much
-  // as a warning, so only ahead of pace turns urgent.
+  // Within the on-pace band an average projection just past empty is
+  // rounding as much as a warning, so it turns urgent only ahead of pace; a
+  // recent rate that runs dry is a warning either way.
   function paceUrgent(pace) {
-    return !!pace && pace.runsOutMs > 0 && pace.state === "ahead"
+    return !!pace && pace.runsOutMs >= 0 && (pace.state === "ahead" || pace.rateSpanMs > 0)
   }
 
   function paceGlyph(pace) {
@@ -668,7 +715,7 @@ Panel {
   function projectionText(w, pace) {
     if (windowLeft(w) === 0) return Commons.I18n.t("agents.limitReached")
     if (!pace || !pace.projected) return ""
-    if (pace.runsOutMs > 0)
+    if (pace.runsOutMs >= 0)
       return Commons.I18n.t("agents.paceOutShort").arg(formatDuration(pace.runsOutMs)).arg(shortfallPercent(pace))
     return Commons.I18n.t("agents.paceLeftAtReset").arg(Commons.I18n.formatNumber(Math.round(pace.leftAtReset * 100)))
   }
@@ -683,11 +730,19 @@ Panel {
         .arg(Commons.I18n.formatNumber(Math.round(windowLeft(w) * 100)))
         .arg(Commons.I18n.formatNumber(Math.round(pace.evenLeft * 100)))
     ]
-    if (pace.runsOutMs > 0) {
-      lines.push(Commons.I18n.t("agents.paceRunsOut").arg(formatDuration(pace.runsOutMs)).arg(formatDuration(resetMsFor(w) - pace.runsOutMs)))
+    var recent = pace.rateSpanMs > 0 ? formatDuration(pace.rateSpanMs) : ""
+    if (pace.runsOutMs >= 0) {
+      var runsOut = formatDuration(pace.runsOutMs)
+      var beforeReset = formatDuration(resetMsFor(w) - pace.runsOutMs)
+      lines.push(recent !== ""
+        ? Commons.I18n.t("agents.paceRunsOutRecent").arg(recent).arg(runsOut).arg(beforeReset)
+        : Commons.I18n.t("agents.paceRunsOut").arg(runsOut).arg(beforeReset))
       lines.push(Commons.I18n.t("agents.paceNeedsMore").arg(shortfallPercent(pace)))
     } else if (pace.projected) {
-      lines.push(Commons.I18n.t("agents.paceStillLeft").arg(Commons.I18n.formatNumber(Math.round(pace.leftAtReset * 100))))
+      var stillLeft = Commons.I18n.formatNumber(Math.round(pace.leftAtReset * 100))
+      lines.push(recent !== ""
+        ? Commons.I18n.t("agents.paceStillLeftRecent").arg(recent).arg(stillLeft)
+        : Commons.I18n.t("agents.paceStillLeft").arg(stillLeft))
     }
     return lines
   }
