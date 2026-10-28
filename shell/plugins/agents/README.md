@@ -24,14 +24,15 @@ Every subscription on one page, limits first.
   percentage says whether usage is ahead of it (more than five points below),
   on it, or under it. Beside the countdown, the recent burn rate is carried to
   the reset: "~34% left at reset", or "Out in 2d 3h · 65% short" when the
-  allowance would run dry first. The rate looks back about a fifth of the
-  window, the last hour of a session or the last day of a week, over the
-  samples each limit carries (see Data); the window's own average would miss a
-  session whose window opened on the hour but whose first prompt came at :45,
-  or a habit that changed halfway. Until the samples cover a sixth of that
-  lookback, the window's average rate so far stands in, once 5% of the window
-  has passed. A recent rate that runs dry turns the projection urgent, an
-  average one only when ahead of pace. Monthly windows, whose billing period
+  allowance would run dry first. The rate looks back the last hour of a
+  session or the last day of a week, over the samples each limit carries (see
+  Data); the window's own average would miss a session whose window opened on
+  the hour but whose first prompt came at :45, or a habit that changed
+  halfway. A week runs through nights as well as working hours, so its rate
+  counts only once the samples cover a whole day; a session's once they cover
+  a sixth of its hour. Until then the window's average rate so far stands in,
+  once 5% of the window has passed. A recent rate that runs dry turns the
+  projection urgent, an average one only when ahead of pace. Monthly windows, whose billing period
   length isn't reported, draw no pace. Hover a row for the full breakdown,
   including which rate it used. A model-scoped allowance (Claude's Fable
   weekly limit) is a row of its own, paced on the clock of the window it runs

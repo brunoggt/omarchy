@@ -156,7 +156,13 @@ assertEqual(Math.round(idle.leftAtReset * 100), 72, 'a burst that stopped no lon
 assertEqual(paceFor(sampled(0.22, 3.5, 5, [[5, 0.21], [0, 0.22]])).rateSpanMs, 0, 'a few minutes of samples leave the average in place')
 const behind = paceFor(sampled(0.22, 3.5, 5, [[70, 0], [10, 0.22]]))
 assertEqual(Math.round(behind.runsOutMs / minute), 203, 'the rate holds from its newest sample, not from now')
-assertEqual(paceFor(sampled(0.42, 64, 168, [[180, 0.4], [0, 0.42]])).rateSpanMs, 0, 'a week needs four hours of samples')
+assertEqual(paceFor(sampled(0.42, 64, 168, [[23 * 60, 0.3], [0, 0.42]])).rateSpanMs, 0, 'a week needs a whole day of samples')
+// 11% gone over an evening and a night of work, well under pace for the week:
+// carried over the nights to the reset, that rate would run dry before it.
+const evening = paceFor(sampled(0.52, 53, 168, [[11 * 60 + 22, 0.41], [0, 0.52]]))
+assertEqual(evening.state, 'under', 'the evening ends under pace by the clock')
+assertEqual(evening.rateSpanMs, 0, 'an evening of samples leaves the week on its average')
+assertEqual(Math.round(evening.leftAtReset * 100), 24, 'which still leaves headroom at the reset')
 const week = paceFor(sampled(0.42, 64, 168, [[36 * 60, 0.25], [24 * 60, 0.3], [0, 0.42]]))
 assertEqual(week.rateSpanMs, 24 * hour, 'the rate looks back a day of a week')
 assertEqual(Math.round(week.leftAtReset * 100), 26, 'the projection carries the last day to the reset')

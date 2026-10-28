@@ -627,16 +627,20 @@ Panel {
     return (w.spanMs - remainingMs) / w.spanMs
   }
 
-  // The burn rate over about the last fifth of the window (an hour of a
-  // session, a day of a week), from the samples on the window. The window's
-  // own average misreads both a late start, since a session's window opens
-  // on the hour rather than at the first prompt, and a habit that changes
-  // halfway, which is when the projection matters most. Null until the
-  // samples cover a sixth of that lookback.
+  // The burn rate over about the last fifth of a session (an hour), from the
+  // samples on the window. The window's own average misreads both a late
+  // start, since a session's window opens on the hour rather than at the
+  // first prompt, and a habit that changes halfway, which is when the
+  // projection matters most. A window that outlasts a day runs through nights
+  // as well as working hours, so its rate looks back a whole day and counts
+  // only once the samples cover one: an evening of work says nothing about
+  // the nights before the reset. A session's counts once the samples cover a
+  // sixth of its lookback. Null until then.
   function recentRate(w) {
     var samples = w && w.history ? w.history : []
     if (samples.length < 2 || !(w.spanMs > 0)) return null
-    var lookbackMs = Math.min(w.spanMs / 5, 24 * 3600 * 1000)
+    var dayMs = 24 * 3600 * 1000
+    var lookbackMs = w.spanMs > dayMs ? dayMs : w.spanMs / 5
     var last = samples[samples.length - 1]
     var anchor = samples[0]
     for (var i = samples.length - 2; i >= 0; i--) {
@@ -646,7 +650,7 @@ Panel {
       }
     }
     var spanMs = last[0] - anchor[0]
-    if (!(spanMs >= lookbackMs / 6)) return null
+    if (!(spanMs >= (w.spanMs > dayMs ? dayMs : lookbackMs / 6))) return null
     return {
       perMs: Math.max(0, Number(last[1]) - Number(anchor[1])) / spanMs,
       asOfMs: Number(last[0]),

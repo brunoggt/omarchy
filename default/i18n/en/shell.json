@@ -59,7 +59,7 @@
   "agents.paceRunsOutRecent": "At the rate of the last %1 the limit runs out in %2, %3 before the reset",
   "agents.paceStillLeft": "At this rate ~%1% is still left when the window resets",
   "agents.paceStillLeftRecent": "At the rate of the last %1, ~%2% is still left when the window resets",
-  "agents.paceUnder": "Under pace: headroom left for the rest of the window",
+  "agents.paceUnder": "Under pace: spending slower than the window elapses",
   "agents.pasteCode": "If the page shows a code instead of finishing, paste it here.",
   "agents.placeholderCode": "Code",
   "agents.placeholderWork": "Work",
